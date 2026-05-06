@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Report Archive</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1><span class="icon">📚</span>Report Archive <span class="stats" id="stats"></span></h1>
+    <div class="spacer"></div>
+    <input id="search" type="search" placeholder="검색 — 제목·부제·태그·본문" />
+    <select id="sort">
+      <option value="analyzedDesc">최근 분석순</option>
+      <option value="publishedDesc">최근 발행순</option>
+      <option value="titleAsc">제목 가나다순</option>
+    </select>
+    <button id="dark-toggle" title="다크모드 토글">🌗</button>
+  </header>
+
+  <div class="filters">
+    <span class="label">타입:</span>
+    <span class="type-chip active" data-type="all">전체</span>
+    <!-- 타입 칩은 JS에서 동적 추가 -->
+  </div>
+
+  <main>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" style="display:none">
+      <p>아직 저장된 리포트가 없습니다.</p>
+      <p>분석 후 "저장해줘" 라고 말하면 여기 누적됩니다.</p>
+    </div>
+  </main>
+
+  <div class="modal-overlay" id="modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title"></h2>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-meta" id="modal-meta"></div>
+      <div class="modal-embed" id="modal-embed" style="display:none"></div>
+      <div class="modal-content" id="modal-content"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <script src="marked.min.js"></script>
+  <script src="data.js"></script>
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => document.querySelectorAll(sel);
+
+    // Dark mode
+    if (localStorage.getItem('dark') === '1') document.body.classList.add('dark');
+    $('#dark-toggle').onclick = () => {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('dark', document.body.classList.contains('dark') ? '1' : '0');
+    };
+
+    // State
+    let activeType = 'all';
+    let activeSort = 'analyzedDesc';
+    let searchQuery = '';
+
+    // --- Render functions ---
+
+    function fmtDate(s) {
+      if (!s) return '';
+      // "20260503" → "2026-05-03"
+      if (/^\d{8}$/.test(s)) return s.slice(0,4) + '-' + s.slice(4,6) + '-' + s.slice(6,8);
+      // ISO datetime → date only
+      if (s.includes('T')) return s.split('T')[0];
+      return s;
+    }
+
+    function fmtDuration(sec) {
+      if (!sec) return '';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      if (m >= 60) {
+        const h = Math.floor(m / 60);
+        return `${h}h ${m % 60}m`;
+      }
+      return `${m}:${String(s).padStart(2,'0')}`;
+    }
+
+    function fmtNumber(n) {
+      if (n == null) return '';
+      if (n >= 1e8) return (n/1e8).toFixed(1) + '억';
+      if (n >= 1e4) return (n/1e4).toFixed(1) + '만';
+      return n.toLocaleString();
+    }
+
+    function getTypeChips() {
+      const types = new Set();
+      (window.REPORTS || []).forEach(r => types.add(r.type || 'other'));
+      return ['all', ...Array.from(types).sort()];
+    }
+
+    function renderTypeChips() {
+      const wrap = $('.filters');
+      // remove existing chips except first label
+      $$('.type-chip').forEach(c => c.remove());
+      getTypeChips().forEach(t => {
+        const chip = document.createElement('span');
+        chip.className = 'type-chip' + (t === activeType ? ' active' : '');
+        chip.dataset.type = t;
+        chip.textContent = t === 'all' ? '전체' : t;
+        chip.onclick = () => { activeType = t; renderTypeChips(); renderGrid(); };
+        wrap.appendChild(chip);
+      });
+    }
+
+    function matchSearch(r, q) {
+      if (!q) return true;
+      const ql = q.toLowerCase();
+      const hay = [
+        r.title, r.subtitle, r.content,
+        ...(r.tags || [])
+      ].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(ql);
+    }
+
+    function sortReports(reports) {
+      const sorted = [...reports];
+      if (activeSort === 'analyzedDesc') {
+        sorted.sort((a,b) => (b.analyzedAt || '').localeCompare(a.analyzedAt || ''));
+      } else if (activeSort === 'publishedDesc') {
+        sorted.sort((a,b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''));
+      } else if (activeSort === 'titleAsc') {
+        sorted.sort((a,b) => (a.title || '').localeCompare(b.title || '', 'ko'));
+      }
+      return sorted;
+    }
+
+    function renderGrid() {
+      const all = window.REPORTS || [];
+      const filtered = all.filter(r =>
+        (activeType === 'all' || (r.type || 'other') === activeType) &&
+        matchSearch(r, searchQuery)
+      );
+      const sorted = sortReports(filtered);
+
+      const grid = $('#grid');
+      grid.innerHTML = '';
+
+      if (sorted.length === 0) {
+        $('#empty').style.display = all.length === 0 ? 'block' : 'none';
+        if (all.length > 0) {
+          grid.innerHTML = '<div class="empty"><p>검색 결과가 없습니다.</p></div>';
+        }
+      } else {
+        $('#empty').style.display = 'none';
+        sorted.forEach(r => grid.appendChild(card(r)));
+      }
+
+      // stats
+      const typeCounts = {};
+      all.forEach(r => { const t = r.type || 'other'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+      const breakdown = Object.entries(typeCounts).map(([k,v]) => `${k} ${v}`).join(' · ');
+      $('#stats').textContent = all.length === 0 ? '' :
+        `· 총 ${all.length}건 ${breakdown ? '(' + breakdown + ')' : ''} · 표시 ${sorted.length}`;
+    }
+
+    function card(r) {
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.onclick = () => openModal(r);
+
+      const thumb = r.thumbnail || '';
+      const dur = r.stats && r.stats.durationSec ? fmtDuration(r.stats.durationSec) : '';
+      const badge = r.stats && r.stats.isMembersOnly ? '🔒 멤버십' :
+                    r.stats && r.stats.isLive ? '🔴 LIVE' : '';
+
+      const tags = (r.tags || []).slice(0,3).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+
+      div.innerHTML = `
+        <div class="thumb" ${thumb ? `style="background-image:url('${escapeAttr(thumb)}')"` : ''}>
+          ${badge ? `<span class="badge">${badge}</span>` : ''}
+          ${dur ? `<span class="duration">${dur}</span>` : ''}
+        </div>
+        <div class="body">
+          <div class="title">${escapeHtml(r.title || '(제목 없음)')}</div>
+          <div class="subtitle">${escapeHtml(r.subtitle || '')}</div>
+          ${tags ? `<div class="tags">${tags}</div>` : ''}
+          <div class="meta">
+            ${r.publishedAt ? `<span>📅 ${fmtDate(r.publishedAt)}</span>` : ''}
+            ${r.stats && r.stats.views != null ? `<span>👁 ${fmtNumber(r.stats.views)}</span>` : ''}
+            ${r.stats && r.stats.likes != null ? `<span>👍 ${fmtNumber(r.stats.likes)}</span>` : ''}
+            ${r.type ? `<span style="margin-left:auto">${r.type}</span>` : ''}
+          </div>
+        </div>
+      `;
+      return div;
+    }
+
+    function openModal(r) {
+      $('#modal-title').textContent = r.title || '(제목 없음)';
+
+      const meta = [];
+      if (r.subtitle) meta.push(escapeHtml(r.subtitle));
+      if (r.publishedAt) meta.push('발행 ' + fmtDate(r.publishedAt));
+      if (r.analyzedAt) meta.push('분석 ' + fmtDate(r.analyzedAt));
+      if (r.stats && r.stats.views != null) meta.push('조회수 ' + fmtNumber(r.stats.views));
+      if (r.stats && r.stats.likes != null) meta.push('좋아요 ' + fmtNumber(r.stats.likes));
+      if (r.stats && r.stats.durationSec) meta.push(fmtDuration(r.stats.durationSec));
+      $('#modal-meta').innerHTML = meta.map(m => `<span>${m}</span>`).join('');
+
+      const embed = $('#modal-embed');
+      if (r.type === 'youtube' && r.id) {
+        embed.style.display = 'block';
+        embed.innerHTML = `<iframe src="https://www.youtube.com/embed/${escapeAttr(r.id)}" allowfullscreen allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"></iframe>`;
+      } else {
+        embed.style.display = 'none';
+        embed.innerHTML = '';
+      }
+
+      $('#modal-content').innerHTML = marked.parse(r.content || '');
+
+      const actions = [];
+      if (r.url) actions.push(`<a href="${escapeAttr(r.url)}" target="_blank"><button>🔗 원본 보기</button></a>`);
+      if (r.tags && r.tags.length) {
+        actions.push(`<span style="color:var(--text-soft); font-size:13px; align-self:center">${r.tags.map(t => '#' + escapeHtml(t)).join(' ')}</span>`);
+      }
+      $('#modal-actions').innerHTML = actions.join('');
+
+      $('#modal').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeModal() {
+      $('#modal').classList.remove('open');
+      $('#modal-embed').innerHTML = '';
+      document.body.style.overflow = '';
+    }
+    $('#modal-close').onclick = closeModal;
+    $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
+    function escapeAttr(s) {
+      return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
+    // Wire up controls
+    $('#search').addEventListener('input', (e) => { searchQuery = e.target.value; renderGrid(); });
+    $('#sort').addEventListener('change', (e) => { activeSort = e.target.value; renderGrid(); });
+
+    // Initial render
+    renderTypeChips();
+    renderGrid();
+  </script>
+</body>
+</html>
