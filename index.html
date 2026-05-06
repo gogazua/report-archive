@@ -47,7 +47,10 @@
   </div>
 
   <script src="marked.min.js"></script>
-  <script src="data.js"></script>
+  <script>
+    // Cache-buster: data.js는 자주 갱신되므로 항상 최신 받기 (Pages 캐시 우회)
+    document.write('<script src="data.js?v=' + Date.now() + '"><\/script>');
+  </script>
   <script>
     const $ = (sel) => document.querySelector(sel);
     const $$ = (sel) => document.querySelectorAll(sel);
