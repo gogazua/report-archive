@@ -12,8 +12,8 @@
     <div class="spacer"></div>
     <input id="search" type="search" placeholder="검색 — 제목·부제·태그·본문" />
     <select id="sort">
-      <option value="analyzedDesc">최근 분석순</option>
       <option value="publishedDesc">최근 발행순</option>
+      <option value="analyzedDesc">최근 분석순</option>
       <option value="titleAsc">제목 가나다순</option>
     </select>
     <button id="dark-toggle" title="다크모드 토글">🌗</button>
@@ -64,7 +64,7 @@
 
     // State
     let activeType = 'all';
-    let activeSort = 'analyzedDesc';
+    let activeSort = 'publishedDesc';
     let searchQuery = '';
 
     // --- Render functions ---
