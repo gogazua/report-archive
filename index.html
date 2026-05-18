@@ -199,7 +199,54 @@
       return div;
     }
 
-    function openModal(r) {
+    // Toast — small floating message (e.g. "링크 복사됨")
+    function toast(msg) {
+      let el = document.getElementById('toast');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'toast';
+        el.style.cssText = 'position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.2s;pointer-events:none';
+        document.body.appendChild(el);
+      }
+      el.textContent = msg;
+      el.style.opacity = '1';
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+    }
+
+    function shareUrl(r) {
+      // Hash-based deep link — works on static GitHub Pages, no server config needed
+      const base = location.origin + location.pathname;
+      return base + '#' + encodeURIComponent(r.id || '');
+    }
+
+    async function copyShareLink(r) {
+      const url = shareUrl(r);
+      try {
+        // Prefer native share sheet on mobile (richer UX); fall back to clipboard
+        if (navigator.share && /Mobi|Android|iPhone/i.test(navigator.userAgent)) {
+          await navigator.share({ title: r.title, url });
+          return;
+        }
+        await navigator.clipboard.writeText(url);
+        toast('🔗 링크 복사됨');
+      } catch (err) {
+        // Last-resort fallback for old browsers / non-https contexts
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); toast('🔗 링크 복사됨'); }
+        catch (e) { toast('복사 실패 — 주소창에서 직접 복사하세요'); }
+        document.body.removeChild(ta);
+      }
+    }
+
+    // When a modal is open, reflect the current report id in the URL hash so
+    // the URL is shareable / bookmarkable. updateHash=false avoids feedback
+    // loops when openModal is itself triggered by a hashchange event.
+    function openModal(r, updateHash = true) {
       $('#modal-title').textContent = r.title || '(제목 없음)';
 
       const meta = [];
@@ -223,24 +270,44 @@
       $('#modal-content').innerHTML = marked.parse(r.content || '');
 
       const actions = [];
-      if (r.url) actions.push(`<a href="${escapeAttr(r.url)}" target="_blank"><button>🔗 원본 보기</button></a>`);
+      actions.push(`<button id="share-btn" title="이 리포트 공유 링크 복사">🔗 링크 복사</button>`);
+      if (r.url) actions.push(`<a href="${escapeAttr(r.url)}" target="_blank"><button>▶️ 원본 보기</button></a>`);
       if (r.tags && r.tags.length) {
         actions.push(`<span style="color:var(--text-soft); font-size:13px; align-self:center">${r.tags.map(t => '#' + escapeHtml(t)).join(' ')}</span>`);
       }
       $('#modal-actions').innerHTML = actions.join('');
+      const shareBtn = document.getElementById('share-btn');
+      if (shareBtn) shareBtn.onclick = () => copyShareLink(r);
 
       $('#modal').classList.add('open');
       document.body.style.overflow = 'hidden';
+
+      if (updateHash && r.id) {
+        history.replaceState(null, '', '#' + encodeURIComponent(r.id));
+      }
     }
 
-    function closeModal() {
+    function closeModal(clearHash = true) {
       $('#modal').classList.remove('open');
       $('#modal-embed').innerHTML = '';
       document.body.style.overflow = '';
+      if (clearHash && location.hash) {
+        history.replaceState(null, '', location.pathname + location.search);
+      }
     }
-    $('#modal-close').onclick = closeModal;
+    $('#modal-close').onclick = () => closeModal();
     $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+    // Open the report matching the current URL hash (if any). Called on
+    // initial page load and on hashchange (e.g. when user navigates back).
+    function openFromHash() {
+      const id = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+      if (!id) { closeModal(false); return; }
+      const r = (window.REPORTS || []).find(x => x.id === id);
+      if (r) openModal(r, false);
+    }
+    window.addEventListener('hashchange', openFromHash);
 
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, c => ({
@@ -258,6 +325,8 @@
     // Initial render
     renderTypeChips();
     renderGrid();
+    // If the page was opened with a deep link (#<id>), open that report
+    openFromHash();
   </script>
 </body>
 </html>
